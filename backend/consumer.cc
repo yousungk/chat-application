@@ -1,79 +1,112 @@
-#include <glib.h>
-#include <librdkafka/rdkafka.h>
+#include "consumer.h"
+#include "utils.h"
+#include "externs.h"
 
-#include "common.cc"
+using namespace std;
 
-static volatile sig_atomic_t run = 1;
-
-/**
- * @brief Signal termination of program
- */
-static void stop(int sig)
+KafkaConsumer::KafkaConsumer(string broker, string group, string topic)
 {
-	run = 0;
-}
+	this->topic = topic;
+	this->broker = broker;
 
-int main(int argc, char **argv)
-{
-	string broker = "localhost:9092";
-	const char *topic = "chat_messages";
-	string group = "consumer-group";
-
-	rd_kafka_t *consumer;
-	rd_kafka_conf_t *conf;
-	rd_kafka_resp_err_t err;
+	rd_kafka_conf_t *conf = rd_kafka_conf_new();
 	char errstr[512];
 
-	// Create client configuration
-	conf = rd_kafka_conf_new();
+	// Set "bootstrap.servers"
+	if (rd_kafka_conf_set(conf, "bootstrap.servers", broker.c_str(), errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
+	{
+		std::cerr << "Error setting bootstrap.servers: " << errstr << std::endl;
+	}
 
-	set_config(conf, "bootstrap.servers", broker.c_str());
-	set_config(conf, "group.id", group.c_str());
-	set_config(conf, "auto.offset.reset", "earliest");
+	// Set "group.id"
+	if (rd_kafka_conf_set(conf, "group.id", group.c_str(), errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
+	{
+		std::cerr << "Error setting group.id: " << errstr << std::endl;
+	}
 
-	// Create the Consumer instance.
+	// Set "auto.offset.reset"
+	if (rd_kafka_conf_set(conf, "auto.offset.reset", "earliest", errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
+	{
+		std::cerr << "Error setting auto.offset.reset: " << errstr << std::endl;
+	}
+
+	// Create the Consumer instance
 	consumer = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, sizeof(errstr));
 	if (!consumer)
 	{
-		g_error("Failed to create new consumer: %s", errstr);
-		return 1;
+		throw std::runtime_error("Error while creating consumer instance");
 	}
 	rd_kafka_poll_set_consumer(consumer);
 
 	// Configuration object is now owned, and freed, by the rd_kafka_t instance
 	conf = NULL;
 
-	// Convert the list of topics to a format suitable for librdkafka
-	rd_kafka_topic_partition_list_t *subscription = rd_kafka_topic_partition_list_new(1);
-	rd_kafka_topic_partition_list_add(subscription, topic, RD_KAFKA_PARTITION_UA);
+	// Create list of subscription
+	subscription = rd_kafka_topic_partition_list_new(0);
+	rd_kafka_assign(consumer, subscription);
+}
 
-	// Subscribe to the list of topics.
-	err = rd_kafka_subscribe(consumer, subscription);
-	if (err)
-	{
-		g_error("Failed to subscribe to %d topics: %s", subscription->cnt, rd_kafka_err2str(err));
-		rd_kafka_topic_partition_list_destroy(subscription);
-		rd_kafka_destroy(consumer);
-		return 1;
-	}
-
+KafkaConsumer::~KafkaConsumer()
+{
 	rd_kafka_topic_partition_list_destroy(subscription);
+	rd_kafka_consumer_close(consumer);
+	rd_kafka_destroy(consumer);
+}
 
-	// Install a signal handler for clean shutdown.
-	signal(SIGINT, stop);
+int KafkaConsumer::add_userID(string userID)
+{
+	int partition = get_partition(userID);
 
-	// Start polling for messages.
-	while (run)
+	print_debug(debug_print, "Adding user %s to partition %d\n", userID.c_str(), partition);
+	if (subscribed_partitions.find(partition) == subscribed_partitions.end())
 	{
-		rd_kafka_message_t *consumer_message;
-
-		consumer_message = rd_kafka_consumer_poll(consumer, 500);
-		if (!consumer_message)
+		// subscribe
+		rd_kafka_topic_partition_list_add(subscription, this->topic.c_str(), partition);
+		rd_kafka_resp_err_t err = rd_kafka_assign(consumer, subscription);
+		if (err)
 		{
-			g_message("Waiting...");
-			continue;
+			cerr << "Failed to subscribe to partition " << partition << endl;
+			return -1;
 		}
 
+		subscribed_partitions[partition] = 1;
+		return 1;
+	}
+	subscribed_partitions[partition] += 1;
+	return 1;
+}
+
+int KafkaConsumer::remove_userID(string userID)
+{
+	int partition = get_partition(userID);
+	subscribed_partitions[partition] -= 1;
+
+	if (subscribed_partitions[partition] == 0)
+	{
+		subscribed_partitions.erase(partition);
+		rd_kafka_topic_partition_list_del(subscription, this->topic.c_str(), partition);
+		rd_kafka_resp_err_t err = rd_kafka_assign(consumer, subscription);
+		if (err != RD_KAFKA_RESP_ERR_NO_ERROR)
+		{
+			std::cerr << "Failed to reassign after removing partition: " << rd_kafka_err2str(err) << std::endl;
+			return -1;
+		}
+	}
+	return 1;
+}
+
+// function used to send message to frontend users
+void KafkaConsumer::poll_messages()
+{
+	while (shutdown_server == 0)
+	{
+		rd_kafka_message_t *consumer_message = rd_kafka_consumer_poll(consumer, 500);
+
+		if (!consumer_message)
+		{
+			cout << ("Waiting...") << endl;
+			continue;
+		}
 		if (consumer_message->err)
 		{
 			if (consumer_message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
@@ -84,29 +117,23 @@ int main(int argc, char **argv)
 			}
 			else
 			{
-				g_message("Consumer error: %s", rd_kafka_message_errstr(consumer_message));
-				return 1;
+				cerr << (rd_kafka_message_errstr(consumer_message)) << endl;
 			}
 		}
 		else
 		{
-			g_message("Consumed event from topic %s: key = %.*s value = %s",
-					  rd_kafka_topic_name(consumer_message->rkt),
-					  (int)consumer_message->key_len,
-					  (char *)consumer_message->key,
-					  (char *)consumer_message->payload);
+			print_debug(debug_print, "Received message from Kafka broker");
+			// RECIPIENT SENDER MESSAGE
+			string message(static_cast<char *>(consumer_message->payload), consumer_message->len);
+			{
+				lock_guard<mutex> lock(message_lock);
+				print_debug(debug_print, "Adding message to send to frontend: %s", message.c_str());
+				message_to_send.push(message);
+				message_to_save.push(message);
+			}
 		}
 
-		// Free the message when we're done.
+		// Free the message when we're done
 		rd_kafka_message_destroy(consumer_message);
 	}
-
-	// Close the consumer: commit final offsets and leave the group.
-	g_message("Closing consumer");
-	rd_kafka_consumer_close(consumer);
-
-	// Destroy the consumer.
-	rd_kafka_destroy(consumer);
-
-	return 0;
 }

@@ -1,0 +1,24 @@
+cqlsh> CREATE KEYSPACE chatapp WITH replication = {
+   ...   'class': 'SimpleStrategy',
+   ...   'replication_factor': 1
+   ... };
+cqlsh> USE chatapp;
+cqlsh:chatapp> CREATE TABLE conversation (
+           ...   user1 TEXT,
+           ...   user2 TEXT,
+           ...   timestamp TIMESTAMP,
+           ...   sender TEXT,
+           ...   message TEXT,
+           ...   PRIMARY KEY ((user1, user2), timestamp)
+           ... );
+cqlsh:chatapp> CREATE TABLE users (
+           ...   username TEXT PRIMARY KEY,
+           ...   password TEXT
+           ... );
+cqlsh:chatapp> CREATE TABLE friends (user1 TEXT, user2 TEXT, PRIMARY KEY (user1, user2));
+
+docker run --name my-cassandra -p 9042:9042 -d cassandra:latest - to run
+docker ps - to check if running
+docker exec -it my-cassandra cqlsh - interact with docker
+docker stop my-cassandra
+docker rm my-cassandra

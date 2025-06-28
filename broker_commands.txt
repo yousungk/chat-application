@@ -1,0 +1,24 @@
+brokers: 
+localhost:9092, 9093, 9094
+
+start each broker instance: 
+bin/kafka-server-start.sh config/server-1.properties
+
+stop: 
+bin/kafka-server-stop.sh config/server-1.properties
+
+verify running instances:
+bin/kafka-broker-api-versions.sh \
+  --bootstrap-server localhost:9092,localhost:9094,localhost:9096
+
+create topic:
+bin/kafka-topics.sh --create \
+  --topic chat_messages \
+  --partitions 3 \
+  --replication-factor 3 \
+  --bootstrap-server localhost:9092
+
+describe distribution of partitions:
+bin/kafka-topics.sh --describe \
+  --topic chat_messages \
+  --bootstrap-server localhost:9092

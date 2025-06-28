@@ -1,16 +1,18 @@
-ALL: producer consumer
+TARGETS = backend_server frontend_server frontend_server_real
 
-CFLAGS=-Wall $(shell pkg-config --cflags glib-2.0 rdkafka)
-LDLIBS=$(shell pkg-config --libs glib-2.0 rdkafka)
+CFLAGS = -Wall -std=c++20 -pthread $(shell pkg-config --cflags rdkafka glib-2.0) -Ibackend -I/opt/homebrew/include
+LDLIBS = $(shell pkg-config --libs rdkafka glib-2.0) -L/opt/homebrew/lib -lcassandra
 
-producer: producer.o
-	g++ $(CFLAGS) -o producer producer.o $(LDLIBS)
+all: $(TARGETS)
 
-consumer: consumer.o
-	g++ $(CFLAGS) -o consumer consumer.o $(LDLIBS)
+backend_server: backend/backend_server.cc
+	g++ $(CFLAGS) backend/*.cc -o backend_server $(LDLIBS)
 
-producer.o: producer.cc
-	g++ $(CFLAGS) -c producer.cc
+frontend_server: frontend/frontend_server.cc
+	g++ -Wall -std=c++20 -pthread frontend/frontend_server.cc -o frontend_server
 
-consumer.o: consumer.cc
-	g++ $(CFLAGS) -c consumer.cc
+frontend_server_real: frontend/frontend_server_real.cc
+	g++ -Wall -std=c++20 -pthread -Ibackend -I/opt/homebrew/include -I/opt/homebrew/Cellar/boost/1.88.0/include frontend/frontend_server_real.cc frontend/tcp_pool.cc backend/cassandra_client.cc -o frontend_server_real -L/opt/homebrew/Cellar/boost/1.88.0/lib -lboost_system -lboost_thread -lboost_json -L/opt/homebrew/lib -lcassandra
+
+clean:
+	rm -fv $(TARGETS) *~ ; rm -fv *.o

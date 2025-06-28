@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Triage Chat Application</title>
+    <link rel="stylesheet" href="../css/style.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+    />
+  </head>
+  <body>
+    <div id="messageContainer" style="display: none"></div>
+    <div id="modal-overlay">
+      <div id="modal-login">
+        <div style="margin: 10px">Sign Into Your Account</div>
+        <form id="login-form">
+          <div>
+            <input
+              class="input-field"
+              type="text"
+              id="username"
+              placeholder="Username"
+              required
+            />
+          </div>
+          <div>
+            <input
+              class="input-field"
+              type="password"
+              id="password"
+              placeholder="Password"
+              required
+            />
+          </div>
+          <div>
+            <button
+              type="button"
+              id="signup-button"
+              class="login-button"
+              onmouseover="this.style.background='linear-gradient(90deg, #45A049, #7CB342)'"
+              onmouseout="this.style.background='linear-gradient(90deg, #4CAF50, #8BC34A)'"
+            >
+              Sign Up
+            </button>
+            <button
+              type="submit"
+              class="login-button"
+              onmouseover="this.style.background='linear-gradient(90deg, #45A049, #7CB342)'"
+              onmouseout="this.style.background='linear-gradient(90deg, #4CAF50, #8BC34A)'"
+            >
+              Login
+            </button>
+          </div>
+        </form>
+        <form id="signup-form" style="display: none">
+          <div>
+            <input
+              class="input-field"
+              type="text"
+              id="signUpUsername"
+              placeholder="Username"
+              required
+            />
+          </div>
+          <div>
+            <input
+              class="input-field"
+              type="password"
+              id="signUpPassword"
+              placeholder="Password"
+              required
+            />
+          </div>
+          <div>
+            <button
+              type="submit"
+              class="login-button"
+              onmouseover="this.style.background='linear-gradient(90deg, #45A049, #7CB342)'"
+              onmouseout="this.style.background='linear-gradient(90deg, #4CAF50, #8BC34A)'"
+            >
+              Sign Up
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div>
+      <div
+        style="
+          display: flex;
+          flex-direction: row;
+          justify-content: space-between;
+        "
+      >
+        <div id="banner">
+          <div class="icon" style="background-color: green"></div>
+          <div class="icon" style="background-color: orange"></div>
+          <div class="icon" style="background-color: maroon"></div>
+        </div>
+        <div id="banner-tools">
+          <div id="signed-in-info">Signed in as</div>
+          <div id="username-info">USERNAME</div>
+          <button type="button" id="log-out-btn">Log out</button>
+        </div>
+      </div>
+      <div id="box">
+        <div id="friend-list">
+          <div class="add-friend-box">
+            <input id="friend-input" placeholder="Add user" />
+            <i id="add-friend-button" class="fa-solid fa-plus"></i>
+          </div>
+          <ul
+            id="friends"
+            style="list-style-type: none; padding: 1px; overflow-y: auto"
+          ></ul>
+        </div>
+        <div id="chat-box">
+          <div id="chat-history"></div>
+          <input id="msg-input" />
+        </div>
+      </div>
+      <footer class="footer">
+        &#169;2025. Made by Ally Kim. All rights reserved.
+        <a href="https://github.com/CIS5550/fa24-cis5050-T21"
+          >Check out my code!</a
+        >
+      </footer>
+    </div>
+    <script>
+      let username = null;
+      let currentFriend = null;
+      const chatHistories = {};
+      let friends = [];
+      let chatOffset = {}; // friend: total number of chat stored
+      let displayedOffset = {}; // friend: number of chat displayed
+      let ws = null;
+
+      const modalOverlay = document.getElementById("modal-overlay");
+      const loginForm = document.getElementById("login-form");
+      const signUpForm = document.getElementById("signup-form");
+      const msgInput = document.getElementById("msg-input");
+      const chatHistory = document.getElementById("chat-history");
+      const friendsList = document.getElementById("friends");
+      const addFriendBtn = document.getElementById("add-friend-button");
+      const signUpBtn = document.getElementById("signup-button");
+      const friendInput = document.getElementById("friend-input");
+      const logOutBtn = document.getElementById("log-out-btn");
+      const usernameInfo = document.getElementById("username-info");
+
+      // check if should route to login or chat page
+      window.onload = () => {
+        const savedUsername = getUserFromCookie();
+        console.log("On load user name is " + savedUsername);
+        if (savedUsername != null && savedUsername != "null") {
+          loadChatInterface();
+        } else {
+          modalOverlay.style.display = "flex";
+        }
+      };
+
+      signUpBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        loginForm.style.display = "none";
+        signUpForm.style.display = "block";
+      });
+
+      signUpForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const newUsername = document.getElementById("signUpUsername").value;
+        const newPassword = document.getElementById("signUpPassword").value;
+        fetch("/signup", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ newUsername, newPassword }),
+        })
+          .then((response) => {
+            if (!response.status.ok) {
+              return response.text().then((errorData) => {
+                showError(errorData.message || "Sign up failed");
+              });
+            }
+            return response.text();
+          })
+          .then((data) => {
+            showSuccess("Sign up successful");
+            // redirect to the login page
+            loginForm.style.display = "block";
+            signUpForm.style.display = "none";
+          })
+          .catch((error) => {
+            console.error("Error during sign up:", error);
+            showError("Sign up failed. Please try again.");
+          });
+      });
+
+      loginForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const providedUsername = document.getElementById("username").value;
+        const providedPassword = document.getElementById("password").value;
+
+        if (providedUsername && providedPassword) {
+          fetch("/login", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ providedUsername, providedPassword }),
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error("Login failed");
+              }
+              return response.text();
+            })
+            .then((data) => {
+              saveUserToCookie(providedUsername);
+              console.log("Login successful:", data);
+              loadChatInterface();
+            })
+            .catch((error) => {
+              console.error("Error during login:", error);
+              showError("Login failed. Please try again.");
+            });
+        }
+      });
+
+      logOutBtn.addEventListener("click", (event) => {
+        username = null;
+        document.cookie = `username=null; path=/`;
+        ws.close();
+        window.location.reload();
+      });
+
+      msgInput.addEventListener("keydown", (event) => {
+        if (currentFriend === null) {
+          return;
+        }
+
+        if (event.key === "Enter") {
+          let messageToSend = msgInput.value.trim();
+          if (!messageToSend) return;
+          chatHistories[currentFriend].push({
+            sender: username,
+            message: messageToSend,
+          });
+          console.log("Added message to history for friend: " + currentFriend);
+          chatOffset[currentFriend] += 1;
+          messageToSend = username + " " + currentFriend + " " + messageToSend;
+          renderMessage(messageToSend);
+          msgInput.value = "";
+          ws.send(messageToSend);
+        }
+      });
+
+      // FUNCTIONS TO DISPLAY MESSAGES /////////////////////////
+      async function loadChatInterface() {
+        username = getUserFromCookie();
+        console.log("Setting username div to " + username);
+        usernameInfo.textContent = username;
+
+        // WEB SOCKET COMMUNICATION ////////////////////////////////
+        ws = new WebSocket("ws://127.0.0.1:8081");
+
+        ws.onopen = () => {
+          console.log("WebSocket connection established.");
+        };
+
+        ws.onerror = (error) => {
+          console.error("WebSocket error:", error);
+        };
+
+        ws.onclose = () => {
+          console.log("WebSocket connection closed.");
+        };
+
+        ws.onmessage = (event) => {
+          const incomingMessageDiv = document.createElement("div");
+          const [sender, recipient, ...messageParts] = event.data.split(" ");
+          const message = messageParts.join(" ");
+
+          if (!friends.includes(sender)) {
+            console.log("Received message from new friend ", sender);
+            // if message from a new friend
+            initializeFriend(sender, true);
+            chatHistories[sender] = [{ sender, message }];
+            chatOffset[sender] = 1;
+            renderFriendList();
+          } else {
+            console.log("Received message from existing friend ", sender);
+            // message from existing friend
+            chatHistories[sender].push({ sender, message });
+            chatOffset[sender] += 1;
+            if (currentFriend === sender) {
+              renderMessage(event.data);
+            } else {
+              const friendLi = document.querySelector(
+                `li[data-name="${sender}"]`
+              );
+            }
+          }
+        };
+
+        await getFriendList();
+        modalOverlay.style.display = "none";
+        signUpForm.style.display = "none";
+      }
+
+      function renderMessage(newMessage) {
+        const [sender, recipient, ...messageParts] = newMessage.split(" ");
+        const message = messageParts.join(" ");
+        const nameDiv = document.createElement("div");
+        nameDiv.className = "sender-div";
+        nameDiv.textContent = sender === username ? "You" : sender;
+        nameDiv.style.alignSelf =
+          sender === username ? "flex-end" : "flex-start";
+        const div = document.createElement("div");
+        div.className = "message";
+        div.style.alignSelf = sender === username ? "flex-end" : "flex-start";
+        if (sender === username) {
+          div.style.backgroundColor = "gray";
+        }
+        div.textContent = message;
+        chatHistory.appendChild(nameDiv);
+        chatHistory.appendChild(div);
+        displayedOffset[currentFriend] += 1;
+        chatHistory.scrollTop = chatHistory.scrollHeight; // scroll to the bottom
+      }
+
+      // GET messages/username/friend/{offset} => get all chat histories
+      function getChatHistories() {
+        console.log("Getting chat history for all friends");
+        friends
+          .filter((friend) => friend != "")
+          .forEach((friend) => {
+            fetch(`/messages/${username}/${friend}`)
+              .then((response) => {
+                if (
+                  response.ok &&
+                  response.headers.get("Content-Length") !== "0"
+                ) {
+                  return response.text();
+                } else {
+                  return null;
+                }
+              })
+              .then((data) => {
+                if (data == null) {
+                  console.log(
+                    "No chat history to display with friend ",
+                    friend
+                  );
+                } else {
+                  console.log("Received chat history: ", data);
+                  const lines = data.split("\n");
+                  const parsedLines = lines
+                    .filter((line) => line.trim() != "")
+                    .map((line) => {
+                      const [sender, recipient, ...messageParts] =
+                        line.split(" ");
+                      const message = messageParts.join(" ");
+                      return { sender, message };
+                    });
+                  chatHistories[friend] = parsedLines;
+                  chatOffset[friend] += parsedLines.length;
+                  if (friends.length > 0) {
+                    currentFriend = friends[0];
+                    renderChatHistory(currentFriend);
+                  }
+                }
+              });
+          });
+      }
+
+      function getMoreChatHistory(friend) {
+        let from = chatOffset[friend] + 1;
+        let to = from + 50;
+        fetch("/messages/" + username + "/" + friend + "/" + from + "/" + to)
+          .then((response) => response.json())
+          .then((data) => {
+            const lines = data.split("\n");
+            const parsedLines = lines.map((line) => {
+              const [sender, recipient, ...messageParts] = line.split(" ", 2);
+              const message = messageParts.join(" ");
+              return { sender, message };
+            });
+            chatHistories[friend] = parsedLines;
+            chatOffset[friend] += parsedLines.length;
+          });
+      }
+
+      // render chat history for the current friend
+      // from current displayed + 50
+      function renderChatHistory(friend) {
+        console.log("Rendering chat history for friend: ", friend);
+        chatHistory.innerHTML = "";
+        // const messagesToRender = chatHistories[friend].slice(
+        //   displayedOffset[friend]
+        // );
+        if (!chatHistories[friend] || chatHistories[friend].length == 0) {
+          console.log("No message to render for friend: ", friend);
+          return;
+        }
+        chatHistories[friend].forEach(({ sender, message }) => {
+          console.log("Rendering message: " + message);
+          const nameDiv = document.createElement("div");
+          nameDiv.className = "sender-div";
+          nameDiv.textContent = sender === username ? "You" : sender;
+          nameDiv.style.alignSelf =
+            sender === username ? "flex-end" : "flex-start";
+          const div = document.createElement("div");
+          div.className = "message";
+          div.style.alignSelf = sender === username ? "flex-end" : "flex-start";
+          if (sender === username) {
+            div.style.backgroundColor = "gray";
+          }
+          div.textContent = message;
+          chatHistory.appendChild(nameDiv);
+          chatHistory.appendChild(div);
+          displayedOffset[friend] += 1;
+        });
+        // scroll down to the bottom
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+      }
+
+      // HANDLING FRIENDS LOGIC ////////////////////////////////
+      friendInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          handleAddFriend();
+        }
+      });
+
+      addFriendBtn.addEventListener("click", () => {
+        handleAddFriend();
+      });
+
+      function handleAddFriend() {
+        let friendName = friendInput.value.trim();
+        friendInput.value = "";
+        if (!friendName || friends.includes(friendName)) return;
+        initializeFriend(friendName, true);
+        currentFriend = friendName;
+        renderFriendList();
+        renderChatHistory(currentFriend);
+        friendsList.scrollTop = chatHistory.scrollHeight;
+      }
+
+      function initializeFriend(friendName, addToDatabase) {
+        // add friend to database
+        friends.push(friendName);
+        chatHistories[friendName] = [];
+        chatOffset[friendName] = 0;
+        displayedOffset[friendName] = 0;
+        if (addToDatabase) {
+          fetch("/friends", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ username, friendName }),
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error("Error with backend");
+              }
+              return response.text();
+            })
+            .then((data) => {
+              console.log("Sucessfully added friend:", data);
+              return 1;
+            })
+            .catch((error) => {
+              console.error("Error during login:", error);
+              showError("Error with adding friend. Please try again.");
+              return -1;
+            });
+        }
+      }
+
+      // GET friends/username => return list of friend usernames
+      async function getFriendList() {
+        console.log("Getting friend list");
+        return fetch("/friends/" + username)
+          .then((response) => {
+            if (response.ok && response.headers.get("Content-Length") !== "0") {
+              return response.text();
+            } else {
+              return null;
+            }
+          })
+          .then((data) => {
+            if (data) {
+              // turn data into array
+              friends = data.split("\n");
+              console.log("Received friends:", data);
+              console.log(friends);
+              friends.forEach((friend) => initializeFriend(friend, false));
+              renderFriendList();
+              getChatHistories();
+            } else {
+              console.log("No friends stored in database");
+            }
+          });
+      }
+
+      // function used to initialize friend list UI
+      function renderFriendList() {
+        console.log("Rendering friend list");
+        if (friends.length == 0) return;
+        friendsList.innerHTML = "";
+        friends
+          .filter((friend) => friend != "")
+          .forEach((friend) => {
+            const li = document.createElement("li");
+            li.className = "friend";
+            li.dataset.name = friend;
+            li.style.backgroundColor =
+              friend === currentFriend ? "lightgray" : "gray";
+            li.innerHTML = `<div style="margin-bottom: 2px">${friend}</div>`;
+
+            li.addEventListener("click", () => {
+              currentFriend = friend;
+              renderFriendList();
+              renderChatHistory(friend);
+
+              const allFriends = document.querySelectorAll(".friend");
+              allFriends.forEach((friendLi) => {
+                friendLi.style.backgroundColor =
+                  friendLi.dataset.name === currentFriend
+                    ? "lightgray"
+                    : "gray";
+              });
+            });
+
+            friendsList.appendChild(li);
+          });
+      }
+
+      // OTHER HELPER FUNCTIONS ///////////////////////////////
+      function getUserFromCookie() {
+        const match = document.cookie.match(/username=([^;]+)/);
+        return match ? decodeURIComponent(match[1]) : null;
+      }
+
+      function saveUserToCookie(name) {
+        console.log("Saving user to cookie: " + name);
+        document.cookie = `username=${encodeURIComponent(name)}; path=/`;
+      }
+
+      function showError(message) {
+        const messageContainer = document.getElementById("messageContainer");
+        messageContainer.style.display = "block";
+        messageContainer.textContent = message;
+        messageContainer.style.color = "maroon";
+        setTimeout(() => {
+          messageContainer.style.display = "none";
+        }, 5000);
+      }
+
+      function showSuccess(message) {
+        const messageContainer = document.getElementById("messageContainer");
+        messageContainer.style.display = "block";
+        messageContainer.textContent = message;
+        messageContainer.style.color = "green";
+        setTimeout(() => {
+          messageContainer.style.display = "none";
+        }, 5000);
+      }
+    </script>
+  </body>
+</html>
