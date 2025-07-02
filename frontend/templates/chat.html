@@ -130,7 +130,7 @@
     <script>
       let username = null;
       let currentFriend = null;
-      const chatHistories = {};
+      let chatHistories = {};
       let friends = [];
       let chatOffset = {}; // friend: total number of chat stored
       let displayedOffset = {}; // friend: number of chat displayed
@@ -148,6 +148,7 @@
       const logOutBtn = document.getElementById("log-out-btn");
       const usernameInfo = document.getElementById("username-info");
 
+      // EVENT HANDLERS ////////////////////////////////////////
       // check if should route to login or chat page
       window.onload = () => {
         const savedUsername = getUserFromCookie();
@@ -178,21 +179,20 @@
         })
           .then((response) => {
             if (!response.status.ok) {
-              return response.text().then((errorData) => {
-                showError(errorData.message || "Sign up failed");
+              return response.text().then((errorMsg) => {
+                showError(errorMsg.message || "Sign up failed.");
               });
             }
             return response.text();
           })
           .then((data) => {
-            showSuccess("Sign up successful");
             // redirect to the login page
+            showSuccess("Sign up successful.");
             loginForm.style.display = "block";
             signUpForm.style.display = "none";
           })
           .catch((error) => {
-            console.error("Error during sign up:", error);
-            showError("Sign up failed. Please try again.");
+            showError("Sign up failed. Error: ", error);
           });
       });
 
@@ -210,25 +210,30 @@
             body: JSON.stringify({ providedUsername, providedPassword }),
           })
             .then((response) => {
-              if (!response.ok) {
-                throw new Error("Login failed");
-              }
-              return response.text();
+              return response.text().then((responseMsg) => {
+                if (!response.ok) {
+                  throw new Error(responseMsg);
+                }
+                return responseMsg;
+              });
             })
             .then((data) => {
               saveUserToCookie(providedUsername);
-              console.log("Login successful:", data);
               loadChatInterface();
             })
             .catch((error) => {
-              console.error("Error during login:", error);
-              showError("Login failed. Please try again.");
+              showError("Login failed: ", error);
             });
         }
       });
 
       logOutBtn.addEventListener("click", (event) => {
         username = null;
+        currentFriend = null;
+        chatHistories = {};
+        friends = [];
+        chatOffset = {};
+        displayedOffset = {};
         document.cookie = `username=null; path=/`;
         ws.close();
         window.location.reload();
@@ -246,8 +251,11 @@
             sender: username,
             message: messageToSend,
           });
-          console.log("Added message to history for friend: " + currentFriend);
+          console.log(
+            "Added message to chat history for friend: " + currentFriend
+          );
           chatOffset[currentFriend] += 1;
+          // <SENDER RECIPIENT MESSAGE>
           messageToSend = username + " " + currentFriend + " " + messageToSend;
           renderMessage(messageToSend);
           msgInput.value = "";
@@ -255,13 +263,28 @@
         }
       });
 
-      // FUNCTIONS TO DISPLAY MESSAGES /////////////////////////
+      friendInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          let friendName = friendInput.value.trim();
+          friendInput.value = "";
+          handleAddFriend(friendName, true);
+          currentFriend = friendName;
+          renderChatHistory(currentFriend);
+        }
+      });
+
+      addFriendBtn.addEventListener("click", () => {
+        let friendName = friendInput.value.trim();
+        friendInput.value = "";
+        handleAddFriend(friendName, true);
+        currentFriend = friendName;
+        renderChatHistory(currentFriend);
+      });
+
+      // FUNCTIONS /////////////////////////////////////////////
       async function loadChatInterface() {
         username = getUserFromCookie();
-        console.log("Setting username div to " + username);
         usernameInfo.textContent = username;
-
-        // WEB SOCKET COMMUNICATION ////////////////////////////////
         ws = new WebSocket("ws://127.0.0.1:8081");
 
         ws.onopen = () => {
@@ -277,20 +300,23 @@
         };
 
         ws.onmessage = (event) => {
+          // <SENDER RECIPIENT MESSAGE>
           const incomingMessageDiv = document.createElement("div");
           const [sender, recipient, ...messageParts] = event.data.split(" ");
           const message = messageParts.join(" ");
 
           if (!friends.includes(sender)) {
-            console.log("Received message from new friend ", sender);
             // if message from a new friend
-            initializeFriend(sender, true);
+            console.log("Received message from new friend ", sender);
+            handleAddFriend(sender, true);
             chatHistories[sender] = [{ sender, message }];
             chatOffset[sender] = 1;
-            renderFriendList();
           } else {
             console.log("Received message from existing friend ", sender);
             // message from existing friend
+            if (!chatHistories[sender]) {
+              chatHistories[sender] = [];
+            }
             chatHistories[sender].push({ sender, message });
             chatOffset[sender] += 1;
             if (currentFriend === sender) {
@@ -304,13 +330,28 @@
         };
 
         await getFriendList();
+        renderFriendList();
+        if (friends.length > 0 && currentFriend === null) {
+          currentFriend = friends[0];
+          await getChatHistory(currentFriend);
+          renderChatHistory(currentFriend);
+          renderFriendList();
+        }
+        // fetch rest of friends chat history
+        friends
+          .filter((friend) => friend != currentFriend)
+          .forEach((friend) => {
+            getChatHistory(friend);
+          });
         modalOverlay.style.display = "none";
         signUpForm.style.display = "none";
       }
 
+      // <SENDER RECIPIENT MESSAGE>
       function renderMessage(newMessage) {
         const [sender, recipient, ...messageParts] = newMessage.split(" ");
         const message = messageParts.join(" ");
+        // create new message div
         const nameDiv = document.createElement("div");
         nameDiv.className = "sender-div";
         nameDiv.textContent = sender === username ? "You" : sender;
@@ -326,79 +367,47 @@
         chatHistory.appendChild(nameDiv);
         chatHistory.appendChild(div);
         displayedOffset[currentFriend] += 1;
-        chatHistory.scrollTop = chatHistory.scrollHeight; // scroll to the bottom
+        // scroll to the bottom
+        chatHistory.scrollTop = chatHistory.scrollHeight;
       }
 
-      // GET messages/username/friend/{offset} => get all chat histories
-      function getChatHistories() {
-        console.log("Getting chat history for all friends");
-        friends
-          .filter((friend) => friend != "")
-          .forEach((friend) => {
-            fetch(`/messages/${username}/${friend}`)
-              .then((response) => {
-                if (
-                  response.ok &&
-                  response.headers.get("Content-Length") !== "0"
-                ) {
-                  return response.text();
-                } else {
-                  return null;
-                }
-              })
-              .then((data) => {
-                if (data == null) {
-                  console.log(
-                    "No chat history to display with friend ",
-                    friend
-                  );
-                } else {
-                  console.log("Received chat history: ", data);
-                  const lines = data.split("\n");
-                  const parsedLines = lines
-                    .filter((line) => line.trim() != "")
-                    .map((line) => {
-                      const [sender, recipient, ...messageParts] =
-                        line.split(" ");
-                      const message = messageParts.join(" ");
-                      return { sender, message };
-                    });
-                  chatHistories[friend] = parsedLines;
-                  chatOffset[friend] += parsedLines.length;
-                  if (friends.length > 0) {
-                    currentFriend = friends[0];
-                    renderChatHistory(currentFriend);
-                  }
-                }
-              });
-          });
-      }
-
-      function getMoreChatHistory(friend) {
-        let from = chatOffset[friend] + 1;
-        let to = from + 50;
-        fetch("/messages/" + username + "/" + friend + "/" + from + "/" + to)
-          .then((response) => response.json())
+      function getChatHistory(friend) {
+        console.log("Fetching chat history for friend: ", friend);
+        return fetch(`/messages/${username}/${friend}`)
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(
+                `HTTP error with fetching chat history: ${response.status}`
+              );
+            }
+            return response.text();
+          })
           .then((data) => {
-            const lines = data.split("\n");
-            const parsedLines = lines.map((line) => {
-              const [sender, recipient, ...messageParts] = line.split(" ", 2);
-              const message = messageParts.join(" ");
-              return { sender, message };
-            });
-            chatHistories[friend] = parsedLines;
-            chatOffset[friend] += parsedLines.length;
+            if (data === "") {
+              console.log("No chat history to display for friend ", friend);
+            } else {
+              console.log("Received chat history for " + friend + ": ", data);
+              const lines = data
+                .split("\n")
+                .filter((line) => line.trim() !== "")
+                .map((line) => {
+                  const [sender, recipient, ...messageParts] = line.split(" ");
+                  const message = messageParts.join(" ");
+                  return { sender, message };
+                });
+              chatHistories[friend] = lines;
+              chatOffset[friend] += lines.length;
+            }
+            return null;
+          })
+          .catch((error) => {
+            console.error(`Error fetching chat history for ${friend}:`, error);
           });
       }
 
-      // render chat history for the current friend
-      // from current displayed + 50
       function renderChatHistory(friend) {
         console.log("Rendering chat history for friend: ", friend);
         chatHistory.innerHTML = "";
-        // const messagesToRender = chatHistories[friend].slice(
-        //   displayedOffset[friend]
-        // );
         if (!chatHistories[friend] || chatHistories[friend].length == 0) {
           console.log("No message to render for friend: ", friend);
           return;
@@ -425,117 +434,87 @@
         chatHistory.scrollTop = chatHistory.scrollHeight;
       }
 
-      // HANDLING FRIENDS LOGIC ////////////////////////////////
-      friendInput.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          handleAddFriend();
-        }
-      });
-
-      addFriendBtn.addEventListener("click", () => {
-        handleAddFriend();
-      });
-
-      function handleAddFriend() {
-        let friendName = friendInput.value.trim();
-        friendInput.value = "";
+      function handleAddFriend(friendName, addToDatabase) {
         if (!friendName || friends.includes(friendName)) return;
-        initializeFriend(friendName, true);
-        currentFriend = friendName;
-        renderFriendList();
-        renderChatHistory(currentFriend);
-        friendsList.scrollTop = chatHistory.scrollHeight;
-      }
-
-      function initializeFriend(friendName, addToDatabase) {
-        // add friend to database
+        // initialize data structures
         friends.push(friendName);
         chatHistories[friendName] = [];
         chatOffset[friendName] = 0;
         displayedOffset[friendName] = 0;
+        // add to database
         if (addToDatabase) {
-          fetch("/friends", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ username, friendName }),
-          })
-            .then((response) => {
-              if (!response.ok) {
-                throw new Error("Error with backend");
-              }
-              return response.text();
-            })
-            .then((data) => {
-              console.log("Sucessfully added friend:", data);
-              return 1;
-            })
-            .catch((error) => {
-              console.error("Error during login:", error);
-              showError("Error with adding friend. Please try again.");
-              return -1;
-            });
+          addFriendToDatabase(friendName);
         }
+        renderFriendList();
       }
 
-      // GET friends/username => return list of friend usernames
+      function addFriendToDatabase(friendName) {
+        fetch("/friends", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ username, friendName }),
+        })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error("Error with backend");
+            }
+            return response.text();
+          })
+          .then((data) => {
+            console.log("Sucessfully added friend: ", data);
+          })
+          .catch((error) => {
+            console.log("Error with adding friend: ", error);
+          });
+      }
+
       async function getFriendList() {
         console.log("Getting friend list");
         return fetch("/friends/" + username)
           .then((response) => {
-            if (response.ok && response.headers.get("Content-Length") !== "0") {
-              return response.text();
-            } else {
-              return null;
-            }
+            return response.text();
           })
           .then((data) => {
-            if (data) {
-              // turn data into array
-              friends = data.split("\n");
-              console.log("Received friends:", data);
-              console.log(friends);
-              friends.forEach((friend) => initializeFriend(friend, false));
-              renderFriendList();
-              getChatHistories();
-            } else {
+            if (data == "") {
               console.log("No friends stored in database");
+            } else {
+              console.log("Received friends:", data);
+              friends = [];
+              friends = data.split("\n").filter((friend) => friend != "");
+              console.log("Friends list: ", friends);
+              friends.forEach((friend) => handleAddFriend(friend, false));
             }
           });
       }
 
-      // function used to initialize friend list UI
       function renderFriendList() {
         console.log("Rendering friend list");
         if (friends.length == 0) return;
         friendsList.innerHTML = "";
-        friends
-          .filter((friend) => friend != "")
-          .forEach((friend) => {
-            const li = document.createElement("li");
-            li.className = "friend";
-            li.dataset.name = friend;
-            li.style.backgroundColor =
-              friend === currentFriend ? "lightgray" : "gray";
-            li.innerHTML = `<div style="margin-bottom: 2px">${friend}</div>`;
+        friends.forEach((friend) => {
+          const li = document.createElement("li");
+          li.className = "friend";
+          li.dataset.name = friend;
+          li.style.backgroundColor =
+            friend === currentFriend ? "lightgray" : "gray";
+          li.innerHTML = `<div style="margin-bottom: 2px">${friend}</div>`;
 
-            li.addEventListener("click", () => {
-              currentFriend = friend;
-              renderFriendList();
-              renderChatHistory(friend);
+          li.addEventListener("click", () => {
+            currentFriend = friend;
+            renderFriendList();
+            renderChatHistory(friend);
 
-              const allFriends = document.querySelectorAll(".friend");
-              allFriends.forEach((friendLi) => {
-                friendLi.style.backgroundColor =
-                  friendLi.dataset.name === currentFriend
-                    ? "lightgray"
-                    : "gray";
-              });
+            const allFriends = document.querySelectorAll(".friend");
+            allFriends.forEach((friendLi) => {
+              friendLi.style.backgroundColor =
+                friendLi.dataset.name === currentFriend ? "lightgray" : "gray";
             });
-
-            friendsList.appendChild(li);
           });
+          friendsList.appendChild(li);
+        });
+        friendsList.scrollTop = chatHistory.scrollHeight;
       }
 
       // OTHER HELPER FUNCTIONS ///////////////////////////////
@@ -549,10 +528,11 @@
         document.cookie = `username=${encodeURIComponent(name)}; path=/`;
       }
 
-      function showError(message) {
+      function showError(message, ...additionalMessages) {
         const messageContainer = document.getElementById("messageContainer");
+        const fullMessage = [message, ...additionalMessages].join(" ");
         messageContainer.style.display = "block";
-        messageContainer.textContent = message;
+        messageContainer.textContent = fullMessage;
         messageContainer.style.color = "maroon";
         setTimeout(() => {
           messageContainer.style.display = "none";

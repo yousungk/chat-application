@@ -15,26 +15,26 @@ KafkaConsumer::KafkaConsumer(string broker, string group, string topic)
 	// Set "bootstrap.servers"
 	if (rd_kafka_conf_set(conf, "bootstrap.servers", broker.c_str(), errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
 	{
-		std::cerr << "Error setting bootstrap.servers: " << errstr << std::endl;
+		cerr << "Error setting bootstrap.servers: " << errstr << endl;
 	}
 
 	// Set "group.id"
 	if (rd_kafka_conf_set(conf, "group.id", group.c_str(), errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
 	{
-		std::cerr << "Error setting group.id: " << errstr << std::endl;
+		cerr << "Error setting group.id: " << errstr << endl;
 	}
 
 	// Set "auto.offset.reset"
 	if (rd_kafka_conf_set(conf, "auto.offset.reset", "earliest", errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
 	{
-		std::cerr << "Error setting auto.offset.reset: " << errstr << std::endl;
+		cerr << "Error setting auto.offset.reset: " << errstr << endl;
 	}
 
 	// Create the Consumer instance
 	consumer = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, sizeof(errstr));
 	if (!consumer)
 	{
-		throw std::runtime_error("Error while creating consumer instance");
+		throw runtime_error("Error while creating consumer instance");
 	}
 	rd_kafka_poll_set_consumer(consumer);
 
@@ -88,7 +88,7 @@ int KafkaConsumer::remove_userID(string userID)
 		rd_kafka_resp_err_t err = rd_kafka_assign(consumer, subscription);
 		if (err != RD_KAFKA_RESP_ERR_NO_ERROR)
 		{
-			std::cerr << "Failed to reassign after removing partition: " << rd_kafka_err2str(err) << std::endl;
+			cerr << "Failed to reassign after removing partition: " << rd_kafka_err2str(err) << endl;
 			return -1;
 		}
 	}
@@ -104,7 +104,7 @@ void KafkaConsumer::poll_messages()
 
 		if (!consumer_message)
 		{
-			cout << ("Waiting...") << endl;
+			print_debug(debug_print, "Consumer waiting...");
 			continue;
 		}
 		if (consumer_message->err)

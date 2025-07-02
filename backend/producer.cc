@@ -41,7 +41,7 @@ KafkaProducer::KafkaProducer(string broker, string assigned_topic)
 			broker.c_str(),
 			errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
 	{
-		throw std::runtime_error(string("Failed to set bootstrap.servers: ") + errstr);
+		throw runtime_error(string("Failed to set bootstrap.servers: ") + errstr);
 	}
 
 	if (rd_kafka_conf_set(
@@ -50,7 +50,7 @@ KafkaProducer::KafkaProducer(string broker, string assigned_topic)
 			"all",
 			errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
 	{
-		throw std::runtime_error(string("Failed to set acks: ") + errstr);
+		throw runtime_error(string("Failed to set acks: ") + errstr);
 	}
 
 	if (rd_kafka_conf_set(conf,
@@ -58,7 +58,7 @@ KafkaProducer::KafkaProducer(string broker, string assigned_topic)
 						  "PLAINTEXT", // or "SASL_SSL"
 						  errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
 	{
-		throw std::runtime_error(string("Failed to set security.protocol: ") + errstr);
+		throw runtime_error(string("Failed to set security.protocol: ") + errstr);
 	}
 
 	// install a delivery-error callback

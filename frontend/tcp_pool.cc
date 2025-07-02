@@ -5,7 +5,7 @@ int TCPConnectionPool::create_connection()
 	int sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (sock < 0)
 	{
-		perror("Socket creation failed");
+		perror("[TCP POOL] Socket creation failed");
 		return -1;
 	}
 
@@ -16,7 +16,7 @@ int TCPConnectionPool::create_connection()
 
 	if (connect(sock, (struct sockaddr *)&backend_addr, sizeof(backend_addr)) < 0)
 	{
-		perror("Connection to backend failed");
+		perror("[TCP POOL] Connection to backend failed");
 		close(sock);
 		return -1;
 	}

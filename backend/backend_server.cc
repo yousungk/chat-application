@@ -22,29 +22,30 @@
 using namespace std;
 
 // TODO
-// 1. deploy using AWS and docker
+// Add coordinator for backend servers
+// frontend connects go to coordinator to get the backend server
 
-// frontend connects to server, go to coordinator to get the backend server (load balancer)
-// multiple backend servers
+// DESIGN SUMMARY:
+// Distributed chat application backend server
+// (1) Distributed Kafka (1 topic, 3 partitions, replicated across 2)
 // multiple brokers - 3 (partitions across brokers, replicated across brokers)
-// broker1 : Partition 0(leader), Partition 1(replica).
-// broker2 : Partition 1(leader), Partition 2(replica).
-// broker3 : Partition 2(leader), Partition 0(replica).
-
+// broker1 : Partition 0(leader), Partition 1(replica)
+// broker2 : Partition 1(leader), Partition 2(replica)
+// broker3 : Partition 2(leader), Partition 0(replica)
 // producer connects to the broker that is the leader for the partition and sends message
 // producer first connect to any broker in Kafka cluster, get metadata about the topic, including list of partitions, leader in each partition, replicas
+// (2) Producer and consumer client to communicate with Kafka broker
+// (3) Cassandra client for storing chat messages once message received by Kafka consumer
 
-// KAFKA
-// can store and read as many times as you want
+// KAFKA NOTES
 // One topic (chat messages), multiple partitions
 // Partitions based on user ID
-// One consumer and producer per backend server
-// (because consumer/producer instance is not lightweight)
+// One consumer and producer per backend server because consumer/producer instance is not lightweight
 
-// CONSUMER
+// CONSUMER NOTES
 // Each consumer can subscribe to the topic+partition pair based on frontend users
-// Consumer can then send the message to the frontend users based on user IP address
-// Dynamically subscribe to new partitions based on incoming frontend connections
+// Then backend server sends message to frontend server by keeping track of USER : FRONTEND_SERVER_ID
+// Dynamically subscribe to new partitions based on incoming frontend connections and users
 
 // partition can only be consumed by one consumer within the consumer group
 // so for each backend server, have one consumer group for each topic+partition pair
@@ -53,7 +54,7 @@ using namespace std;
 // it also sends heartbeat this way
 
 // PRODUCER
-// Each producer just send the message to the topic, with KEY as the frontend user ID
+// Each producer just send the message to the topic, with KEY as the username to identify partition
 
 KafkaConsumer *consumer;
 KafkaProducer *producer;
@@ -79,8 +80,6 @@ void shutdown()
 	message_queue_cv.notify_one();
 }
 
-// thread for sending out messages
-// backend needs to connect to
 void send_message_to_frontend()
 {
 	print_debug(debug_print, "Sending message to frontend thread started\n");
@@ -115,33 +114,28 @@ void save_message_to_cassandra()
 		if (!message_to_save.empty())
 		{
 			string c_message = message_to_save.front();
-			message_to_save.pop(); // Remove the message from the queue
+			message_to_save.pop();
 			// parse the message
 			// SENDER RECIPIENT MESSAGE
-
-			// Parse the message
 			istringstream iss(c_message);
 			string timestamp, sender, recipient, message;
-
 			if (getline(iss, sender, ' ') &&
 				getline(iss, recipient, ' ') &&
 				getline(iss, message))
 			{
-				// Successfully parsed the message
-				cassandra->save_message_to_db(sender, recipient, sender, message);
+				// successfully parsed the message
 				print_debug(debug_print, "Got message to save to Cassandra: %s\n", c_message.c_str());
+				cassandra->save_message_to_db(sender, recipient, sender, message);
 			}
 			else
 			{
-				// Handle parsing error
-				print_debug(debug_print, "Failed to parse message: %s\n", c_message.c_str());
+				print_debug(debug_print, "Failed to parse message to save to Cassandra: %s\n", c_message.c_str());
 			}
 		}
 	}
 }
 
-// thread function to send message to Kafka broker
-// using producer client
+// thread function to send message to Kafka broker using producer client
 void send_message_to_producer()
 {
 	print_debug(debug_print, "Sending message to producer thread started\n");
@@ -158,13 +152,11 @@ void send_message_to_producer()
 		{
 			break;
 		}
-
 		while (!message_queue.empty() && shutdown_server == 0)
 		{
-			// get message
 			pair<string, string> to_send = message_queue.front();
 			message_queue.pop();
-			print_debug(debug_print, "Consumed [%s] from queue\n", to_send.second.c_str());
+			print_debug(debug_print, "Consumed message from queue for Kafka producer: %s\n", to_send.second.c_str());
 			// release lock
 			message_queue_mutex.unlock();
 			// send to producer
@@ -247,7 +239,7 @@ void accept_frontend_connections()
 				if (user_frontendID.find(user) != user_frontendID.end())
 				{
 					consumer->remove_userID(user);
-					cout << "Unsubscribing user from partition: " << user << endl;
+					print_debug(debug_print, "Unsubscribed user %s from consumer\n", user.c_str());
 				}
 			}
 			frontendID_users.erase(frontend_id);
@@ -258,7 +250,7 @@ void accept_frontend_connections()
 		int ret = select(max_fd + 1, &r, &w, NULL, &timeout);
 		if (ret < 0)
 		{
-			cout << "Failed with select()" << endl;
+			perror("Failed with select()");
 			shutdown();
 			return;
 		}
@@ -270,17 +262,13 @@ void accept_frontend_connections()
 			struct sockaddr_in src;
 			socklen_t srclen = sizeof(src);
 			int connfd = accept(listen_fd, (struct sockaddr *)&src, &srclen);
-			// make non blocking
-			// int flags = fcntl(connfd, F_GETFL, 0);
-			// fcntl(connfd, F_SETFL, flags | O_NONBLOCK);
 			string client_ip_port = get_address(src);
 			if (connfd < 0)
 			{
 				cerr << "Error with accept function in frontend thread" << endl;
 				continue;
 			}
-			print_debug(debug_print, "New frontend connection FD: %d\n", connfd);
-			print_debug(debug_print, "New frontend client IP: %s\n", client_ip_port.c_str());
+			print_debug(debug_print, "New frontend connection FD [%d] IP: [%s]\n", connfd, client_ip_port.c_str());
 
 			// send greeting message
 			string greeting = "+OK Server ready\r\n";
@@ -293,11 +281,11 @@ void accept_frontend_connections()
 		{
 			if (FD_ISSET(fd, &r))
 			{
-				cout << "reading inside the fd isset loop" << endl;
+				print_debug(debug_print, "Reading message from frontend FD: %d\n", fd);
 				string message = do_read(fd, "\n");
 				if (message.find("USERNAME") != string::npos)
 				{
-					cout << "RECEIVED USERNAME" << endl;
+					print_debug(debug_print, "Received USERNAME message from fd %d", fd);
 					vector<string> parsed_message = split(message, ' ');
 					if (parsed_message.size() != 3)
 					{
@@ -310,7 +298,7 @@ void accept_frontend_connections()
 					frontendID_users[frontend_server_id].push_back(username);
 					// subscribe to the user partition if not already subscribed
 					consumer->add_userID(username);
-					print_debug(debug_print, "Added user %s to consumer\n", username.c_str());
+					print_debug(debug_print, "Subscribed user %s for consumer\n", username.c_str());
 				}
 				else if (message.find("DISCONNECTED") != string::npos)
 				{
@@ -335,7 +323,7 @@ void accept_frontend_connections()
 					{
 						// send message to producer
 						// pair of recipient, message
-						cout << "RECEIVED MESSAGE" << endl;
+						print_debug(debug_print, "Received MESSAGE from fd %d", fd);
 						vector<string> parsed_message = split(message, ' ');
 						if (parsed_message.size() < 3)
 						{
@@ -346,7 +334,7 @@ void accept_frontend_connections()
 						pair<string, string> to_send = make_pair(recipient, message);
 						lock_guard<mutex> lock(message_queue_mutex);
 						message_queue.push(to_send);
-						print_debug(debug_print, "Message added to message queue: %s\n", message.c_str());
+						print_debug(debug_print, "Message added to message queue for producer: %s\n", message.c_str());
 					}
 					message_queue_cv.notify_one();
 				}
